@@ -66,33 +66,34 @@ oAuth2Client.setCredentials({
 const calendar = google.calendar({ version: 'v3', auth: oAuth2Client });
 
 // Your system prompt
-const systemPrompt = `You are a helpful scheduling assistant that handles reservations and creates appointments on Google Calendar.
+const systemPrompt = `Eres un asistente de programación útil que gestiona reservas y crea citas en Google Calendar.
 
-Purpose: Help users schedule appointments, make reservations, and manage their calendar.
+Propósito: Ayudar a los usuarios a programar citas, hacer reservas y gestionar su calendario.
 
-Guidelines:
-- Maintain a professional, friendly, and efficient tone
-- Collect all necessary information before creating appointments (date, time, duration, purpose)
-- Verify schedule availability before confirming appointments
-- Provide clear confirmation details after scheduling
-- Help users reschedule or cancel appointments when needed
-- Suggest alternative times when requested slots are unavailable
-- When answering questions, use the knowledge base to provide accurate information
+Directrices:
+- Mantener un tono profesional, amigable y eficiente
+- Recopilar toda la información necesaria antes de crear citas (fecha, hora, duración, propósito)
+- Verificar la disponibilidad del horario antes de confirmar citas
+- Proporcionar detalles claros de confirmación después de programar
+- Ayudar a los usuarios a reprogramar o cancelar citas cuando sea necesario
+- Sugerir horarios alternativos cuando los espacios solicitados no estén disponibles
+- Al responder preguntas, utilizar la base de conocimientos para proporcionar información precisa
 
-Knowledge:
-- You can check calendar availability
-- You can create, modify, and cancel calendar events
-- You understand scheduling conventions and time zones
-- You have access to a knowledge base with policies, procedures, and FAQs
+Conocimientos:
+- Puedes verificar la disponibilidad del calendario
+- Puedes crear, modificar y cancelar eventos del calendario
+- Entiendes las convenciones de programación y zonas horarias
+- Tienes acceso a una base de conocimientos con políticas, procedimientos y preguntas frecuentes
 
-Response Format:
-- Be concise but thorough
-- For scheduling requests, confirm all details
-- For calendar queries, present information clearly
-- Always confirm successful calendar operations
-- When referencing information from the knowledge base, cite the source document
+Formato de respuesta:
+- Sé conciso pero completo
+- Para solicitudes de programación, confirma todos los detalles
+- Para consultas de calendario, presenta la información claramente
+- Siempre confirma las operaciones exitosas del calendario
+- Cuando hagas referencia a información de la base de conocimientos, cita el documento fuente
 
-Remember to verify all scheduling details and provide confirmation numbers for appointments.`;
+Recuerda verificar todos los detalles de programación y proporcionar números de confirmación para las citas.`;
+
 
 // Knowledge base setup
 const knowledgeBasePath = process.env.KNOWLEDGE_BASE_PATH || './knowledge';
@@ -265,8 +266,8 @@ async function checkAvailability(args: AvailabilityArgs): Promise<AvailabilityRe
   try {
     const response = await calendar.freebusy.query({
       requestBody: {
-        timeMin: startDateTime,
-        timeMax: endDateTime,
+        timeMin: startDateTime.endsWith('Z') ? startDateTime : `${startDateTime}Z`,
+        timeMax: endDateTime.endsWith('Z') ? endDateTime : `${endDateTime}Z`,
         items: [{ id: calendarId }]
       }
     });
@@ -282,8 +283,11 @@ async function checkAvailability(args: AvailabilityArgs): Promise<AvailabilityRe
       startDateTime,
       endDateTime
     };
-  } catch (error) {
+  } catch (error: any) {
     console.error("Calendar API Error:", error);
+    if (error.response && error.response.data) {
+      console.error("Detailed error:", JSON.stringify(error.response.data, null, 2));
+    }
     throw new Error("Failed to check availability");
   }
 }
@@ -451,7 +455,7 @@ async function semanticSearch(query: string, maxResults: number = 3): Promise<Se
     
     // Sort by relevance and return top results
     return scoredResults
-      .filter(result => result.relevanceScore > 40) // Only return relevant results
+      .filter(result => result.relevanceScore > 20) // Only return relevant results
       .sort((a, b) => b.relevanceScore - a.relevanceScore)
       .slice(0, maxResults);
   } catch (error) {
@@ -670,6 +674,13 @@ async function chatWithBot(userMessage: string, conversationHistory: Message[] =
     if (responseMessage.tool_calls) {
       const toolCalls = responseMessage.tool_calls;
       
+        // Add the assistant's message with tool_calls to the conversation
+      messages.push({
+        role: 'assistant',
+        content: responseMessage.content || "",
+        tool_calls: responseMessage.tool_calls
+      });
+
       for (const toolCall of toolCalls) {
         // Execute the function
         const functionName = toolCall.function.name;
@@ -698,10 +709,9 @@ async function chatWithBot(userMessage: string, conversationHistory: Message[] =
       }
       
       // Get a new response from the model after function call
-      const secondOpenAIMessages = messages.map(convertToOpenAIMessage);
       const secondResponse = await chatOpenAI.chat.completions.create({
         model: process.env.CHAT_DEPLOYMENT_NAME as string, // Updated model name variable
-        messages: secondOpenAIMessages,
+        messages: messages.map(convertToOpenAIMessage),
         temperature: 0.7
       });
       
@@ -766,6 +776,26 @@ app.post('/api/chat', async (req: Request, res: Response) => {
   sessions[sessionId] = updatedHistory;
   
   res.json({ response });
+});
+
+app.get('/api/list-kb', (req: Request, res: Response) => {
+  const documentsInfo = knowledgeBase.map(doc => ({
+    id: doc.id,
+    title: doc.title,
+    contentPreview: doc.content.substring(0, 100) + '...',
+    hasEmbedding: !!doc.metadata?.embedding
+  }));
+  res.json(documentsInfo);
+});
+
+app.get('/api/list-calendars', async (req, res) => {
+  try {
+    const response = await calendar.calendarList.list();
+    res.json(response.data);
+  } catch (error) {
+    console.error("Error listing calendars:", error);
+    res.status(500).json({ error: "Failed to list calendars" });
+  }
 });
 
 // Initialize and start the server

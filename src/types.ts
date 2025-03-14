@@ -2,11 +2,21 @@ import { ChatCompletionMessageParam } from 'openai/resources';
 
 export type Role = 'system' | 'user' | 'assistant' | 'tool';
 
+export type ToolCall = {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+};
+
 export interface Message {
   role: Role;
   content: string;
   tool_call_id?: string;
   name?: string;
+  tool_calls?: ToolCall[]; // Add this line
 }
 
 export type ChatResponse = {
@@ -137,6 +147,12 @@ export function convertToOpenAIMessage(message: Message): ChatCompletionMessageP
       role: 'assistant', 
       content: message.content 
     };
+    
+    // Only add tool_calls if it exists
+    if (message.tool_calls) {
+      assistantMessage.tool_calls = message.tool_calls;
+    }
+    
     return assistantMessage;
   } else if (message.role === 'tool') {
     if (!message.tool_call_id) {
@@ -146,7 +162,6 @@ export function convertToOpenAIMessage(message: Message): ChatCompletionMessageP
       role: 'tool', 
       content: message.content, 
       tool_call_id: message.tool_call_id
-      // Note: 'name' property has been removed as it's not in the OpenAI type definition
     };
   }
   throw new Error(`Unsupported role: ${message.role}`);
